@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Sensor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; padding: 20px; }
+    h1   { color: #38bdf8; }
+    .charts { display: flex; gap: 20px; flex-wrap: wrap; }
+    .card   { background: #1e293b; border-radius: 10px; padding: 20px; flex: 1; min-width: 400px; }
+    .anomaly-box { background: #1e293b; border-radius: 10px; padding: 20px; margin-top: 20px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 12px; text-align: left; border-bottom: 1px solid #334155; }
+    th { color: #38bdf8; }
+    .anomaly { color: #f87171; font-weight: bold; }
+    .status  { color: #4ade80; }
+  </style>
+</head>
+<body>
+  <h1>⚙ Industrial Sensor Monitor</h1>
+  <p id="last-updated" style="color:#94a3b8"></p>
+
+  <div class="charts">
+    <div class="card">
+      <h3>🌡 Temperature over Time</h3>
+      <canvas id="tempChart"></canvas>
+    </div>
+    <div class="card">
+      <h3>💨 Pressure over Time</h3>
+      <canvas id="pressChart"></canvas>
+    </div>
+  </div>
+
+  <div class="anomaly-box">
+    <h3>⚠ Recent Anomalies</h3>
+    <table>
+      <thead><tr><th>Sensor</th><th>Temperature</th><th>Pressure</th><th>Time</th><th>Status</th></tr></thead>
+      <tbody id="anomaly-table"></tbody>
+    </table>
+  </div>
+
+<script>
+  // ── Chart setup ────────────────────────────────────
+  const COLORS = { "1": "#38bdf8", "2": "#a78bfa", "3": "#34d399" }
+
+  function makeChart(id, label) {
+    return new Chart(document.getElementById(id), {
+      type: "line",
+      data: { labels: [], datasets: [] },
+      options: {
+        animation: false,
+        plugins: { legend: { labels: { color: "#e2e8f0" } } },
+        scales: {
+          x: { ticks: { color: "#94a3b8" }, grid: { color: "#1e293b" } },
+          y: { ticks: { color: "#94a3b8" }, grid: { color: "#334155" } }
+        }
+      }
+    })
+  }
+
+  const tempChart  = makeChart("tempChart",  "Temperature")
+  const pressChart = makeChart("pressChart", "Pressure")
+
+  // ── Fetch and update every 3 seconds ───────────────
+  async function fetchAndUpdate() {
+    const res  = await fetch("/api/data")
+    const data = await res.json()
+
+    // Group by sensor
+    const sensors = {}
+    data.reverse().forEach(r => {
+      if (!sensors[r.sensor_id]) sensors[r.sensor_id] = []
+      sensors[r.sensor_id].push(r)
+    })
+
+    // Build chart data
+    const labels = data.map(r => new Date(r.timestamp * 1000).toLocaleTimeString())
+
+    ;[tempChart, pressChart].forEach(c => {
+      c.data.labels    = [...new Set(labels)].slice(-20)
+      c.data.datasets  = []
+    })
+
+    Object.entries(sensors).forEach(([sid, readings]) => {
+      const last20 = readings.slice(-20)
+      const color  = COLORS[sid] || "#f59e0b"
+      const times  = last20.map(r => new Date(r.timestamp * 1000).toLocaleTimeString())
+
+      tempChart.data.datasets.push({
+        label: `Sensor-${sid}`, data: last20.map(r => r.temperature),
+        borderColor: color, backgroundColor: color + "33",
+        pointBackgroundColor: last20.map(r => r.is_anomaly ? "#f87171" : color),
+        pointRadius: last20.map(r => r.is_anomaly ? 6 : 3),
+        tension: 0.3, fill: false
+      })
+
+      pressChart.data.datasets.push({
+        label: `Sensor-${sid}`, data: last20.map(r => r.pressure),
+        borderColor: color, backgroundColor: color + "33",
+        tension: 0.3, fill: false
+      })
+
+      tempChart.data.labels  = times
+      pressChart.data.labels = times
+    })
+
+    tempChart.update()
+    pressChart.update()
+
+    // Anomaly table — show last 10 anomalies
+    const anomalies = data.filter(r => r.is_anomaly).slice(-10).reverse()
+    const tbody = document.getElementById("anomaly-table")
+    tbody.innerHTML = anomalies.map(r => `
+      <tr>
+        <td>Sensor-${r.sensor_id}</td>
+        <td class="anomaly">${r.temperature}°C</td>
+        <td class="anomaly">${r.pressure} PSI</td>
+        <td>${new Date(r.timestamp * 1000).toLocaleTimeString()}</td>
+        <td class="anomaly">⚠ ANOMALY</td>
+      </tr>
+    `).join("")
+
+    document.getElementById("last-updated").textContent =
+      "Last updated: " + new Date().toLocaleTimeString()
+  }
+
+  fetchAndUpdate()
+  setInterval(fetchAndUpdate, 3000)
+</script>
+</body>
+</html>
